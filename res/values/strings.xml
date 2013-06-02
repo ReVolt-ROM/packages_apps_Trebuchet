@@ -275,9 +275,7 @@ s -->
     <!-- Dummy string [CHAR_LIMIT=60] -->
     <string name="custom_workspace_cling_description_2"></string>
 
-    <string name="preferences_pinch_expanded_title">Pinch to enable expanded desktop</string>
-
-    <!-- BAM -->
+    <!-- gestures -->
     <string name="preferences_interface_gestures_title">Gestures</string>
     <string name="preferences_interface_gestures_homescreen_category">Homescreen gestures</string>
     <string name="preferences_interface_gestures_double_tap_title">Double tap</string>
@@ -290,6 +288,9 @@ s -->
     <string name="preferences_interface_gestures_preferences">Trebuchet settings</string>
     <string name="preferences_interface_gestures_launch_application">Launch activity</string>
     <string name="preferences_interface_gestures_settings">System settings</string>
+    <string name="preferences_pinch_expanded_title">Pinch to enable expanded desktop</string>
+
+    <!-- others -->
     <string name="preferences_interface_homescreen_icon_scale_summary">Scale of icons on the homescreen</string>
     <string name="preferences_interface_drawer_icon_scale_summary">Scale of icons in the app drawer</string>
     <string name="preferences_interface_drawer_background_title">Background color</string>

@@ -35,5 +35,8 @@
                     android:entries="@array/preferences_interface_gestures_homescreen_entries"
                     android:entryValues="@array/preferences_interface_gestures_homescreen_values"
                     android:defaultValue="0" />
+                <CheckBoxPreference android:key="ui_pinch_expanded"
+                     android:title="@string/preferences_pinch_expanded_title"
+                     android:defaultValue="false" />
             </PreferenceCategory>
 </PreferenceScreen>

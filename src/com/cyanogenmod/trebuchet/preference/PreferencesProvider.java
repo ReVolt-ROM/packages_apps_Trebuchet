@@ -247,6 +247,9 @@ public final class PreferencesProvider {
             public static int getHomescreenSwipeDown() {
                 return Integer.parseInt(getString("ui_homescreen_swipe_down", "0"));
             }
+            public static boolean getPinchExpanded(boolean def) {
+                return getBoolean("ui_pinch_expanded", def); 
+            }
         }
 
         public static class General {
