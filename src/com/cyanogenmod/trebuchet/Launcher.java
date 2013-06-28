@@ -1614,6 +1614,9 @@ public final class Launcher extends Activity
                     mWorkspace.exitWidgetResizeMode();
                     if (alreadyOnHome && mState == State.WORKSPACE && !mWorkspace.isTouchActive() &&
                             openFolder == null) {
+                        if (mStateAnimation != null) {
+                            mStateAnimation = null;
+                        }
                         mWorkspace.moveToDefaultScreen(true);
                         mHotseat.moveToDefaultScreen(true);
                     }
