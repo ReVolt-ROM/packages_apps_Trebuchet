@@ -51,6 +51,7 @@ import com.cyanogenmod.trebuchet.preference.PreferencesProvider;
 import java.lang.ref.WeakReference;
 import java.net.URISyntaxException;
 import java.text.Collator;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -78,6 +79,7 @@ public class LauncherModel extends BroadcastReceiver {
     private DeferredHandler mHandler = new DeferredHandler();
     private LoaderTask mLoaderTask;
     private boolean mIsLoaderTaskRunning;
+    private volatile boolean mFlushingWorkerThread;
 
     // Specific runnable types that are run on the main thread deferred handler, this allows us to
     // clear all queued binding runnables when the Launcher activity is destroyed.
@@ -154,8 +156,10 @@ public class LauncherModel extends BroadcastReceiver {
         public void bindAllApplications(ArrayList<ApplicationInfo> apps);
         public void bindAppsAdded(ArrayList<ApplicationInfo> apps);
         public void bindAppsUpdated(ArrayList<ApplicationInfo> apps);
-        public void bindAppsRemoved(ArrayList<String> packageNames, boolean permanent);
-        public void bindPackagesUpdated();
+        public void bindComponentsRemoved(ArrayList<String> packageNames,
+                        ArrayList<ApplicationInfo> appInfos,
+                        boolean matchPackageNamesOnly);
+        public void bindPackagesUpdated(ArrayList<Object> widgetsAndShortcuts);
         public boolean isAllAppsVisible();
         public void bindSearchablesChanged();
         public void onPageBoundSynchronously(int page);
@@ -348,6 +352,7 @@ public class LauncherModel extends BroadcastReceiver {
                             case LauncherSettings.Favorites.ITEM_TYPE_APPLICATION:
                             case LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT:
                             case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
+                            case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
                             case LauncherSettings.Favorites.ITEM_TYPE_ALLAPPS:
                                 if (!sBgWorkspaceItems.contains(modelItem)) {
                                     sBgWorkspaceItems.add(modelItem);
@@ -363,6 +368,35 @@ public class LauncherModel extends BroadcastReceiver {
             }
         };
         runOnWorkerThread(r);
+    }
+
+    public void flushWorkerThread() {
+        mFlushingWorkerThread = true;
+        Runnable waiter = new Runnable() {
+                public void run() {
+                    synchronized (this) {
+                        notifyAll();
+                        mFlushingWorkerThread = false;
+                    }
+                }
+            };
+
+        synchronized(waiter) {
+            runOnWorkerThread(waiter);
+            if (mLoaderTask != null) {
+                synchronized(mLoaderTask) {
+                    mLoaderTask.notify();
+                }
+            }
+            boolean success = false;
+            while (!success) {
+                try {
+                    waiter.wait();
+                    success = true;
+                } catch (InterruptedException e) {
+                }
+            }
+        }
     }
 
     /**
@@ -532,11 +566,13 @@ public class LauncherModel extends BroadcastReceiver {
                 final int screenIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.SCREEN);
                 final int cellXIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.CELLX);
                 final int cellYIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.CELLY);
+                final int receiverPackageIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.RECEIVER_COMPONENT);
 
                 FolderInfo folderInfo = null;
                 switch (c.getInt(itemTypeIndex)) {
+                    case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
                     case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
-                        folderInfo = findOrMakeFolder(folderList, id);
+                        folderInfo = findOrMakeFolder(folderList, id, c.getInt(itemTypeIndex));
                         break;
                 }
 
@@ -547,6 +583,11 @@ public class LauncherModel extends BroadcastReceiver {
                     folderInfo.screen = c.getInt(screenIndex);
                     folderInfo.cellX = c.getInt(cellXIndex);
                     folderInfo.cellY = c.getInt(cellYIndex);
+                }
+
+                if (folderInfo instanceof LiveFolderInfo) {
+                    LiveFolderInfo info = (LiveFolderInfo) folderInfo;
+                    info.receiver = ComponentName.unflattenFromString(c.getString(receiverPackageIndex));
                 }
 
                 return folderInfo;
@@ -562,7 +603,7 @@ public class LauncherModel extends BroadcastReceiver {
      * Add an item to the database in a specified container. Sets the container, screen, cellX and
      * cellY fields of the item. Also assigns an ID to the item.
      */
-    static void addItemToDatabase(Context context, final ItemInfo item, final long container,
+    static void addItemToDatabase(final Context context, final ItemInfo item, final long container,
             final int screen, final int cellX, final int cellY, final boolean notify) {
 
         // We store hotseat items in canonical form which is this orientation invariant position
@@ -609,8 +650,12 @@ public class LauncherModel extends BroadcastReceiver {
                     checkItemInfoLocked(item.id, item, null);
                     sBgItemsIdMap.put(item.id, item);
                     switch (item.itemType) {
+                        case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
                         case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
                             sBgFolders.put(item.id, (FolderInfo) item);
+                            if (item instanceof LiveFolderInfo) {
+                                LiveFoldersReceiver.alertFolderModified(context, (LiveFolderInfo) item, false);
+                            }
                             // Fall through
                         case LauncherSettings.Favorites.ITEM_TYPE_APPLICATION:
                         case LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT:
@@ -697,6 +742,7 @@ public class LauncherModel extends BroadcastReceiver {
                 // Lock on mBgLock *after* the db operation
                 synchronized (sBgLock) {
                     switch (item.itemType) {
+                        case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
                         case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
                             sBgFolders.remove(item.id);
                             for (ItemInfo info: sBgItemsIdMap.values()) {
@@ -1050,9 +1096,11 @@ public class LauncherModel extends BroadcastReceiver {
                         }
                     });
 
-                while (!mStopped && !mLoadAndBindStepFinished) {
+                while (!mStopped && !mLoadAndBindStepFinished && !mFlushingWorkerThread) {
                     try {
-                        this.wait();
+                        // Just in case mFlushingWorkerThread changes but we aren't woken up,
+                        // wait no longer than 1sec at a time
+                        this.wait(1000);
                     } catch (InterruptedException ex) {
                         // Ignore
                     }
@@ -1308,6 +1356,8 @@ public class LauncherModel extends BroadcastReceiver {
                             (LauncherSettings.Favorites.SPANX);
                     final int spanYIndex = c.getColumnIndexOrThrow(
                             LauncherSettings.Favorites.SPANY);
+                    final int receiverPackageIndex = c.getColumnIndexOrThrow(
+                            LauncherSettings.Favorites.RECEIVER_COMPONENT);
 
                     ShortcutInfo info;
                     String intentDescription;
@@ -1390,7 +1440,7 @@ public class LauncherModel extends BroadcastReceiver {
                                     default:
                                         // Item is in a user folder
                                         FolderInfo folderInfo =
-                                                findOrMakeFolder(sBgFolders, container);
+                                                findOrMakeFolder(sBgFolders, container, LauncherSettings.Favorites.ITEM_TYPE_FOLDER);
                                         folderInfo.add(info);
                                         break;
                                     }
@@ -1410,11 +1460,11 @@ public class LauncherModel extends BroadcastReceiver {
                                                 id, false), null, null);
                                 }
                                 break;
-
+                            case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
                             case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
                                 id = c.getLong(idIndex);
-                                FolderInfo folderInfo = findOrMakeFolder(sBgFolders, id);
-
+                                FolderInfo folderInfo = findOrMakeFolder(sBgFolders, id, itemType);
+                                folderInfo.itemType = itemType;
                                 folderInfo.title = c.getString(titleIndex);
                                 folderInfo.id = id;
                                 container = c.getInt(containerIndex);
@@ -1422,6 +1472,11 @@ public class LauncherModel extends BroadcastReceiver {
                                 folderInfo.screen = c.getInt(screenIndex);
                                 folderInfo.cellX = c.getInt(cellXIndex);
                                 folderInfo.cellY = c.getInt(cellYIndex);
+
+                                if (folderInfo instanceof LiveFolderInfo) {
+                                    LiveFolderInfo fInfo = (LiveFolderInfo) folderInfo;
+                                    fInfo.receiver = ComponentName.unflattenFromString(c.getString(receiverPackageIndex));
+                                }
 
                                 // check & update map of what's occupied
                                 if (!checkItemPlacement(occupied, folderInfo)) {
@@ -1693,7 +1748,7 @@ public class LauncherModel extends BroadcastReceiver {
                             }
                         }
 
-                        if (folder.contents.size() == 1) {
+                        if (folder.contents.size() == 1 && !(folder instanceof LiveFolderInfo)) {
                             ShortcutInfo finalItem = folder.contents.get(0);
                             finalItem.container = folder.container;
                             LauncherModel.deleteItemFromDatabase(mContext, folder);
@@ -1702,7 +1757,7 @@ public class LauncherModel extends BroadcastReceiver {
                             workspaceItems.remove(i);
                             workspaceItems.add(finalItem);
                             folders.remove(Long.valueOf(item.id));
-                        } else if (folder.contents.size() == 0) {
+                        } else if (folder.contents.size() == 0  && !(folder instanceof LiveFolderInfo)) {
                             LauncherModel.deleteFolderContentsFromDatabase(mContext, folder);
                             workspaceItems.remove(i);
                             folders.remove(Long.valueOf(item.id));
@@ -2065,30 +2120,40 @@ public class LauncherModel extends BroadcastReceiver {
             final Context context = mApp;
 
             final String[] packages = mPackages;
+            final int N = packages.length;
             switch (mOp) {
                 case OP_ADD:
-                    for (String p : packages) {
-                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.addPackage " + p);
-                        mBgAllAppsList.addPackage(context, p);
+                    for (int i=0; i<N; i++) {
+                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.addPackage " + packages[i]);
+                        mBgAllAppsList.addPackage(context, packages[i]);
                     }
                     break;
                 case OP_UPDATE:
-                    for (String p : packages) {
-                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.updatePackage " + p);
-                        mBgAllAppsList.updatePackage(context, p);
+                    for (int i=0; i<N; i++) {
+                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.updatePackage " + packages[i]);
+                        mBgAllAppsList.updatePackage(context, packages[i]);
+                        LauncherApplication app =
+                                (LauncherApplication) context.getApplicationContext();
+                        WidgetPreviewLoader.removeFromDb(
+                                app.getWidgetPreviewCacheDb(), packages[i]);
                     }
                     break;
                 case OP_REMOVE:
                 case OP_UNAVAILABLE:
-                    for (String p : packages) {
-                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.removePackage " + p);
-                        mBgAllAppsList.removePackage(p);
+                    for (int i=0; i<N; i++) {
+                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.removePackage " + packages[i]);
+                        mBgAllAppsList.removePackage(packages[i]);
+                        LauncherApplication app =
+                                (LauncherApplication) context.getApplicationContext();
+                        WidgetPreviewLoader.removeFromDb(
+                                app.getWidgetPreviewCacheDb(), packages[i]);
                     }
                     break;
             }
 
             ArrayList<ApplicationInfo> added = null;
             ArrayList<ApplicationInfo> modified = null;
+            final ArrayList<ApplicationInfo> removedApps = new ArrayList<ApplicationInfo>();
 
             if (mBgAllAppsList.added.size() > 0) {
                 added = new ArrayList<ApplicationInfo>(mBgAllAppsList.added);
@@ -2098,14 +2163,9 @@ public class LauncherModel extends BroadcastReceiver {
                 modified = new ArrayList<ApplicationInfo>(mBgAllAppsList.modified);
                 mBgAllAppsList.modified.clear();
             }
-            // We may be removing packages that have no associated launcher application, so we
-            // pass through the removed package names directly.
-            // NOTE: We flush the icon cache aggressively in removePackage() above.
-            final ArrayList<String> removedPackageNames = new ArrayList<String>();
             if (mBgAllAppsList.removed.size() > 0) {
+                removedApps.addAll(mBgAllAppsList.removed);
                 mBgAllAppsList.removed.clear();
-
-                removedPackageNames.addAll(Arrays.asList(packages));
             }
 
             final Callbacks callbacks = mCallbacks != null ? mCallbacks.get() : null;
@@ -2136,28 +2196,48 @@ public class LauncherModel extends BroadcastReceiver {
                     }
                 });
             }
-            if (!removedPackageNames.isEmpty()) {
-                final boolean permanent = mOp != OP_UNAVAILABLE;
+            // If a package has been removed, or an app has been removed as a result of
+            // an update (for example), make the removed callback.
+            if (mOp == OP_REMOVE || !removedApps.isEmpty()) {
+                final boolean permanent = (mOp == OP_REMOVE);
+                final ArrayList<String> removedPackageNames =
+                        new ArrayList<String>(Arrays.asList(packages));
+
                 mHandler.post(new Runnable() {
                     public void run() {
                         Callbacks cb = mCallbacks != null ? mCallbacks.get() : null;
-                        if (callbacks == cb) {
-                            callbacks.bindAppsRemoved(removedPackageNames, permanent);
+                        if (callbacks == cb && cb != null) {
+                            callbacks.bindComponentsRemoved(removedPackageNames,
+                                    removedApps, permanent);
                         }
                     }
                 });
             }
 
+            final ArrayList<Object> widgetsAndShortcuts =
+                getSortedWidgetsAndShortcuts(context);
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
                     Callbacks cb = mCallbacks != null ? mCallbacks.get() : null;
-                    if (callbacks == cb) {
-                        callbacks.bindPackagesUpdated();
+                    if (callbacks == cb && cb != null) {
+                        callbacks.bindPackagesUpdated(widgetsAndShortcuts);
                     }
                 }
             });
         }
+    }
+
+    // Returns a list of ResolveInfos/AppWindowInfos in sorted order
+    public static ArrayList<Object> getSortedWidgetsAndShortcuts(Context context) {
+        PackageManager packageManager = context.getPackageManager();
+        final ArrayList<Object> widgetsAndShortcuts = new ArrayList<Object>();
+        widgetsAndShortcuts.addAll(AppWidgetManager.getInstance(context).getInstalledProviders());
+        Intent shortcutsIntent = new Intent(Intent.ACTION_CREATE_SHORTCUT);
+        widgetsAndShortcuts.addAll(packageManager.queryIntentActivities(shortcutsIntent, 0));
+        Collections.sort(widgetsAndShortcuts,
+            new LauncherModel.WidgetAndShortcutNameComparator(packageManager));
+        return widgetsAndShortcuts;
     }
 
     /**
@@ -2469,12 +2549,16 @@ public class LauncherModel extends BroadcastReceiver {
      * Return an existing FolderInfo object if we have encountered this ID previously,
      * or make a new one.
      */
-    private static FolderInfo findOrMakeFolder(HashMap<Long, FolderInfo> folders, long id) {
+    private static FolderInfo findOrMakeFolder(HashMap<Long, FolderInfo> folders, long id, int folderType) {
         // See if a placeholder was created for us already
         FolderInfo folderInfo = folders.get(id);
         if (folderInfo == null) {
             // No placeholder -- create a new instance
-            folderInfo = new FolderInfo();
+            if (folderType == LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER) {
+                folderInfo = new LiveFolderInfo();
+            } else {
+                folderInfo = new FolderInfo();
+            }
             folders.put(id, folderInfo);
         }
         return folderInfo;

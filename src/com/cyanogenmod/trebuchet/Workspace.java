@@ -520,6 +520,8 @@ public class Workspace extends PagedView
         LauncherApplication app = (LauncherApplication)context.getApplicationContext();
         mIconCache = app.getIconCache();
         setWillNotDraw(false);
+        setClipChildren(false);
+        setClipToPadding(false);
         setChildrenDrawnWithCacheEnabled(true);
 
         final Resources res = getResources();
@@ -937,7 +939,7 @@ public class Workspace extends PagedView
             if (isSmall()) {
                 // If we are in springloaded mode, then force an event to check if the current touch
                 // is under a new page (to scroll to)
-                mDragController.forceMoveEvent();
+                mDragController.forceTouchMove();
             }
         } else {
             // If we are not mid-dragging, hide the page outlines
@@ -1364,7 +1366,8 @@ public class Workspace extends PagedView
         float startAlpha = getBackgroundAlpha();
         if (finalAlpha != startAlpha) {
             if (animated) {
-                mBackgroundFadeOutAnimation = LauncherAnimUtils.ofFloat(startAlpha, finalAlpha);
+                mBackgroundFadeOutAnimation =
+                        LauncherAnimUtils.ofFloat(this, startAlpha, finalAlpha);
                 mBackgroundFadeOutAnimation.addUpdateListener(new AnimatorUpdateListener() {
                     public void onAnimationUpdate(ValueAnimator animation) {
                         setBackgroundAlpha((Float) animation.getAnimatedValue());
@@ -1998,13 +2001,13 @@ public class Workspace extends PagedView
                 }
             }
             for (int i = 0; i < screenCount; i++) {
-                final CellLayout layout = (CellLayout) getChildAt(i);
+                final CellLayout layout = (CellLayout) getPageAt(i);
                 if (!(leftScreen <= i && i <= rightScreen && shouldDrawChild(layout))) {
                     layout.disableHardwareLayers();
                 }
             }
             for (int i = 0; i < screenCount; i++) {
-                final CellLayout layout = (CellLayout) getChildAt(i);
+                final CellLayout layout = (CellLayout) getPageAt(i);
                 if (leftScreen <= i && i <= rightScreen && shouldDrawChild(layout)) {
                     layout.enableHardwareLayers();
                 }
@@ -2405,7 +2408,8 @@ public class Workspace extends PagedView
                     }
                     if (mOldBackgroundAlphas[i] != 0 ||
                         mNewBackgroundAlphas[i] != 0) {
-                        ValueAnimator bgAnim = LauncherAnimUtils.ofFloat(0f, 1f).setDuration(duration);
+                        ValueAnimator bgAnim =
+                                LauncherAnimUtils.ofFloat(cl, 0f, 1f).setDuration(duration);
                         bgAnim.setInterpolator(mZoomInInterpolator);
                         bgAnim.addUpdateListener(new LauncherAnimatorUpdateListener() {
                                 public void onAnimationUpdate(float a, float b) {
@@ -2418,7 +2422,6 @@ public class Workspace extends PagedView
                     }
                 }
             }
-            buildPageHardwareLayers();
             anim.setStartDelay(delay);
         }
 
@@ -2438,6 +2441,7 @@ public class Workspace extends PagedView
     @Override
     public void onLauncherTransitionPrepare(Launcher l, boolean animated, boolean toWorkspace) {
         mIsSwitchingState = true;
+        updateChildrenLayersEnabled(false);
         cancelScrollingIndicatorAnimations();
     }
 
@@ -3768,6 +3772,10 @@ public class Workspace extends PagedView
                         mLauncher.processShortcutFromDrop(pendingInfo.componentName,
                                 container, screen, mTargetCell, null);
                         break;
+                    case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
+                        mLauncher.processLiveFolderFromDrop(pendingInfo.componentName,
+                                container, screen, mTargetCell, null);
+                        break;
                     default:
                         throw new IllegalStateException("Unknown item type: " +
                                 pendingInfo.itemType);
@@ -3805,6 +3813,7 @@ public class Workspace extends PagedView
                 view = mLauncher.createShortcut(R.layout.application, cellLayout,
                         (ShortcutInfo) info);
                 break;
+            case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
             case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
                 view = FolderIcon.fromXml(R.layout.folder_icon, mLauncher, cellLayout,
                         (FolderInfo) info);
@@ -4319,10 +4328,72 @@ public class Workspace extends PagedView
         }
     }
 
-    void removeItems(final ArrayList<String> packages) {
-        final HashSet<String> packageNames = new HashSet<String>();
+    // Removes ALL items that match a given package name, this is usually called when a package
+    // has been removed and we want to remove all components (widgets, shortcuts, apps) that
+    // belong to that package.
+    void removeItemsByPackageName(final ArrayList<String> packages) {
+        HashSet<String> packageNames = new HashSet<String>();
         packageNames.addAll(packages);
 
+        // Just create a hash table of all the specific components that this will affect
+        HashSet<ComponentName> cns = new HashSet<ComponentName>();
+        ArrayList<CellLayout> cellLayouts = getWorkspaceAndHotseatCellLayouts();
+        for (CellLayout layoutParent : cellLayouts) {
+            ViewGroup layout = layoutParent.getShortcutsAndWidgets();
+            int childCount = layout.getChildCount();
+            for (int i = 0; i < childCount; ++i) {
+                View view = layout.getChildAt(i);
+                Object tag = view.getTag();
+
+                if (tag instanceof ShortcutInfo) {
+                    ShortcutInfo info = (ShortcutInfo) tag;
+                    ComponentName cn = info.intent.getComponent();
+                    if ((cn != null) && packageNames.contains(cn.getPackageName())) {
+                        cns.add(cn);
+                    }
+                } else if (tag instanceof LiveFolderInfo) {
+                    final LiveFolderInfo info = (LiveFolderInfo) tag;
+                    final String packageName = info.receiver.getPackageName();
+                    if (packages.contains(packageName)) {
+                        cns.add(info.receiver);
+                    }
+                } else if (tag instanceof FolderInfo) {
+                    FolderInfo info = (FolderInfo) tag;
+                    for (ShortcutInfo s : info.contents) {
+                        ComponentName cn = s.intent.getComponent();
+                        if ((cn != null) && packageNames.contains(cn.getPackageName())) {
+                            cns.add(cn);
+                        }
+                    }
+                } else if (tag instanceof LauncherAppWidgetInfo) {
+                    LauncherAppWidgetInfo info = (LauncherAppWidgetInfo) tag;
+                    ComponentName cn = info.providerName;
+                    if ((cn != null) && packageNames.contains(cn.getPackageName())) {
+                        cns.add(cn);
+                    }
+                }
+            }
+        }
+
+        // Remove all the things
+        removeItemsByComponentName(cns);
+    }
+
+    // Removes items that match the application info specified, when applications are removed
+    // as a part of an update, this is called to ensure that other widgets and application
+    // shortcuts are not removed.
+    void removeItemsByApplicationInfo(final ArrayList<ApplicationInfo> appInfos) {
+        // Just create a hash table of all the specific components that this will affect
+        HashSet<ComponentName> cns = new HashSet<ComponentName>();
+        for (ApplicationInfo info : appInfos) {
+            cns.add(info.componentName);
+        }
+
+        // Remove all the things
+        removeItemsByComponentName(cns);
+    }
+
+    void removeItemsByComponentName(final HashSet<ComponentName> componentNames) {
         ArrayList<CellLayout> cellLayouts = getWorkspaceAndHotseatCellLayouts();
         for (final CellLayout layoutParent: cellLayouts) {
             final ViewGroup layout = layoutParent.getShortcutsAndWidgets();
@@ -4344,10 +4415,17 @@ public class Workspace extends PagedView
 
                             if (intent != null) {
                                 final ComponentName name = intent.getComponent();
-                                if (name != null && packageNames.contains(name.getPackageName())) {
+                                if (name != null && componentNames.contains(name)) {
                                     LauncherModel.deleteItemFromDatabase(mLauncher, info);
                                     childrenToRemove.add(view);
                                 }
+                            }
+                        } else if (tag instanceof LiveFolderInfo) {
+                            final LiveFolderInfo info = (LiveFolderInfo) tag;
+                            final ComponentName name = info.receiver;
+                            if (name != null && componentNames.contains(name)) {
+                                LauncherModel.deleteItemFromDatabase(mLauncher, info);
+                                childrenToRemove.add(view);
                             }
                         } else if (tag instanceof FolderInfo) {
                             final FolderInfo info = (FolderInfo) tag;
@@ -4360,7 +4438,7 @@ public class Workspace extends PagedView
                                 final ComponentName name = intent.getComponent();
 
                                 if (name != null) {
-                                    if (packageNames.contains(name.getPackageName())) {
+                                    if (componentNames.contains(name)) {
                                         appsToRemoveFromFolder.add(appInfo);
                                     }
                                 }
@@ -4373,7 +4451,7 @@ public class Workspace extends PagedView
                             final LauncherAppWidgetInfo info = (LauncherAppWidgetInfo) tag;
                             final ComponentName provider = info.providerName;
                             if (provider != null) {
-                                if (packageNames.contains(provider.getPackageName())) {
+                                if (componentNames.contains(provider)) {
                                     LauncherModel.deleteItemFromDatabase(mLauncher, info);
                                     childrenToRemove.add(view);
                                 }
@@ -4418,8 +4496,7 @@ public class Workspace extends PagedView
                         while (iter.hasNext()) {
                             try {
                                 Intent intent = Intent.parseUri(iter.next(), 0);
-                                String pn = ItemInfo.getPackageName(intent);
-                                if (packageNames.contains(pn)) {
+                                if (componentNames.contains(intent.getComponent())) {
                                     iter.remove();
                                 }
 

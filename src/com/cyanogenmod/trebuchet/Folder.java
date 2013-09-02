@@ -25,6 +25,7 @@ import android.content.res.Resources;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
+import android.os.Vibrator;
 import android.text.InputType;
 import android.text.Selection;
 import android.text.Spannable;
@@ -43,6 +44,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.cyanogenmod.trebuchet.FolderInfo.FolderListener;
 import com.cyanogenmod.trebuchet.preference.PreferencesProvider;
@@ -91,7 +93,7 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
     private int[] mEmptyCell = new int[2];
     private Alarm mReorderAlarm = new Alarm();
     private Alarm mOnExitAlarm = new Alarm();
-    private int mFolderNameHeight;
+    private int mFolderNameHeight, mFolderNameWidth;
     private Rect mTempRect = new Rect();
     private boolean mDragInProgress = false;
     private boolean mDeleteFolderOnDropCompleted = false;
@@ -105,10 +107,14 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
     private InputMethodManager mInputMethodManager;
 
     private static String sDefaultFolderName;
-    private static String sHintText;
+    private String mHintText;
     private ObjectAnimator mOpenCloseAnimator;
 
     private boolean mDestroyed;
+
+    // Empty folder filler
+    private TextView mEmptyTitle;
+    private int mEmptyTitleWidth, mEmptyTitleHeight;
 
     /**
      * Used to inflate the Workspace from XML.
@@ -140,8 +146,8 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         if (sDefaultFolderName == null) {
             sDefaultFolderName = res.getString(R.string.folder_name);
         }
-        if (sHintText == null) {
-            sHintText = res.getString(R.string.folder_hint_text);
+        if (mHintText == null) {
+            mHintText = res.getString(R.string.folder_hint_text);
         }
         mLauncher = (Launcher) context;
         // We need this view to be focusable in touch mode so that when text editing of the folder
@@ -170,6 +176,7 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         int measureSpec = MeasureSpec.UNSPECIFIED;
         mFolderName.measure(measureSpec, measureSpec);
         mFolderNameHeight = mFolderName.getMeasuredHeight();
+        mFolderNameWidth = mFolderName.getMeasuredWidth();
 
         // We disable action mode for now since it messes up the view on phones
         mFolderName.setCustomSelectionActionModeCallback(mActionModeCallback);
@@ -177,6 +184,11 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         mFolderName.setSelectAllOnFocus(true);
         mFolderName.setInputType(mFolderName.getInputType() |
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+
+        mEmptyTitle = (TextView) findViewById(R.id.empty_content);
+        mEmptyTitle.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED);
+        mEmptyTitleWidth = mEmptyTitle.getMeasuredWidth();
+        mEmptyTitleHeight = mEmptyTitle.getMeasuredHeight();
 
         if (PreferencesProvider.Interface.Homescreen.getHideIconLabels()){
             mFolderName.setVisibility(View.GONE);
@@ -206,6 +218,16 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         if (tag instanceof ShortcutInfo) {
             // refactor this code from Folder
             ShortcutInfo item = (ShortcutInfo) tag;
+
+            if (item instanceof LiveFolderItemInfo && item.intent == null) {
+                LiveFolderItemInfo fItem = (LiveFolderItemInfo) item;
+                if (fItem.item_id > 0) {
+                    LiveFoldersReceiver.alertItemOpened(mContext, (LiveFolderInfo) getInfo(),
+                            (LiveFolderItemInfo) item);
+                }
+                return;
+            }
+
             int[] pos = new int[2];
             v.getLocationOnScreen(pos);
             item.intent.setSourceBounds(new Rect(pos[0], pos[1],
@@ -216,19 +238,36 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
     }
 
     public boolean onLongClick(View v) {
-        // Only if workspace is not locked
-        if (mLauncher.getLockWorkspace()) return false;
 
         // Return if global dragging is not enabled
         if (!mLauncher.isDraggingEnabled()) return true;
 
-        Object tag = v.getTag();
-        if (tag instanceof ShortcutInfo) {
-            ShortcutInfo item = (ShortcutInfo) tag;
+        ShortcutInfo item = v.getTag() instanceof ShortcutInfo ?
+                (ShortcutInfo) v.getTag() : null;
+
+        if (item != null) {
             if (!v.isInTouchMode()) {
                 return false;
             }
 
+            if (item instanceof LiveFolderItemInfo) {
+                mLauncher.dismissFolderCling(null);
+                getInfo().remove(item);
+                Vibrator vibr = (Vibrator) mContext.getSystemService(Context.VIBRATOR_SERVICE);
+                vibr.vibrate(DragController.VIBRATE_DURATION);
+                LiveFoldersReceiver.alertItemRemoved(mContext,
+                        (LiveFolderInfo) getInfo(), (LiveFolderItemInfo) item);
+                return true;
+            }
+        }
+
+        // Only if workspace is not locked
+        if (mLauncher.getLockWorkspace()) {
+            Toast.makeText(mContext, getResources().getString(R.string.workspace_locked), Toast.LENGTH_SHORT).show();
+            return false;
+        }
+
+        if (item != null) {
             mLauncher.dismissFolderCling(null);
 
             mLauncher.getWorkspace().onDragStartedWithItem(v);
@@ -263,7 +302,7 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
     }
 
     public void doneEditingFolderName(boolean commit) {
-        mFolderName.setHint(sHintText);
+        mFolderName.setHint(mHintText);
         // Convert to a string here to ensure that no other state associated with the text field
         // gets saved.
         String newTitle = mFolderName.getText().toString();
@@ -399,6 +438,10 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         } else {
             mFolderName.setText("");
         }
+
+        if (getInfo() instanceof LiveFolderInfo) {
+            mFolderName.setEnabled(false);
+        }
         updateItemLocationsInDatabase();
     }
 
@@ -448,24 +491,19 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
             public void onAnimationEnd(Animator animation) {
                 mState = STATE_OPEN;
                 setLayerType(LAYER_TYPE_NONE, null);
-                Cling cling = mLauncher.showFirstRunFoldersCling();
+                Cling cling = mLauncher.showFirstRunFoldersCling(mInfo instanceof LiveFolderInfo);
                 if (cling != null) {
                     cling.bringToFront();
                 }
                 setFocusOnFirstChild();
+                setAlpha(1);
+                setScaleX(1);
+                setScaleY(1);
             }
         });
         oa.setDuration(mExpandDuration);
         setLayerType(LAYER_TYPE_HARDWARE, null);
-        buildLayer();
-        post(new Runnable() {
-            public void run() {
-                // Check if the animator changed in the meantime
-                if (oa != mOpenCloseAnimator)
-                    return;
-                oa.start();
-            }
-        });
+        oa.start();
     }
 
     private void sendCustomAccessibilityEvent(int type, String text) {
@@ -510,15 +548,7 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         });
         oa.setDuration(mExpandDuration);
         setLayerType(LAYER_TYPE_HARDWARE, null);
-        buildLayer();
-        post(new Runnable() {
-            public void run() {
-                // Check if the animator changed in the meantime
-                if (oa != mOpenCloseAnimator)
-                    return;
-                oa.start();
-            }
-        });
+        oa.start();
     }
 
     void notifyDataSetChanged() {
@@ -814,9 +844,19 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
     private void centerAboutIcon() {
         DragLayer.LayoutParams lp = (DragLayer.LayoutParams) getLayoutParams();
 
-        int width = getPaddingLeft() + getPaddingRight() + mContent.getDesiredWidth();
-        int height = getPaddingTop() + getPaddingBottom() + mContent.getDesiredHeight()
-                + mFolderNameHeight;
+        int width = getPaddingLeft() + getPaddingRight();
+        int height = getPaddingTop() + getPaddingBottom() + mFolderNameHeight;
+
+        if (mContent.getCountX() == 0) {
+            width += mEmptyTitleWidth;
+            height += mEmptyTitleHeight;
+            mEmptyTitle.setVisibility(View.VISIBLE);
+        } else {
+            mEmptyTitle.setVisibility(View.GONE);
+            width += mContent.getDesiredWidth();
+            height += mContent.getDesiredHeight();
+        }
+
         DragLayer parent = (DragLayer) mLauncher.findViewById(R.id.drag_layer);
 
         float scale = parent.getDescendantRectRelativeToSelf(mFolderIcon, mTempRect);
@@ -894,10 +934,23 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
                 MeasureSpec.EXACTLY);
         int contentHeightSpec = MeasureSpec.makeMeasureSpec(mContent.getDesiredHeight(),
                 MeasureSpec.EXACTLY);
-        mContent.measure(contentWidthSpec, contentHeightSpec);
+
+        if (mContent.getCountX() == 0) {
+            width += mEmptyTitleWidth;
+            contentWidthSpec = MeasureSpec.makeMeasureSpec(
+                    mEmptyTitleWidth, MeasureSpec.EXACTLY);
+            mContent.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(0, MeasureSpec.EXACTLY));
+        } else {
+            mContent.measure(contentWidthSpec, contentHeightSpec);
+        }
 
         mFolderName.measure(contentWidthSpec,
                 MeasureSpec.makeMeasureSpec(mFolderNameHeight, MeasureSpec.EXACTLY));
+
+        mEmptyTitle.measure(contentWidthSpec,
+                MeasureSpec.makeMeasureSpec(mEmptyTitleHeight, MeasureSpec.EXACTLY));
+
         setMeasuredDimension(width, height);
     }
 
@@ -917,8 +970,10 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
             if (info.cellX != vacant[0] || info.cellY != vacant[1]) {
                 info.cellX = vacant[0];
                 info.cellY = vacant[1];
-                LauncherModel.addOrMoveItemInDatabase(mLauncher, info, mInfo.id, 0,
-                        info.cellX, info.cellY);
+                if (!(getInfo() instanceof LiveFolderInfo)) {
+                    LauncherModel.addOrMoveItemInDatabase(mLauncher, info, mInfo.id, 0,
+                            info.cellX, info.cellY);
+                }
             }
             mContent.addViewToCellLayout(v, 0, (int) info.id, lp, true);
         }
@@ -943,6 +998,7 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         mFolderIcon.requestFocus();
 
         if (mRearrangeOnClose) {
+            mItemsInvalidated = true;
             setupContentForNumItems(getItemCount());
             mRearrangeOnClose = false;
         }
@@ -957,6 +1013,11 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
     }
 
     private void replaceFolderWithFinalItem() {
+
+        if (mInfo instanceof LiveFolderInfo) {
+            return;
+        }
+
         // Add the last remaining child to the workspace in place of the folder
         Runnable onCompleteRunnable = new Runnable() {
             @Override
@@ -1067,8 +1128,10 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
             findAndSetEmptyCells(item);
         }
         createAndAddShortcut(item);
-        LauncherModel.addOrMoveItemInDatabase(
-                mLauncher, item, mInfo.id, 0, item.cellX, item.cellY);
+        if (!(item instanceof LiveFolderItemInfo)) {
+            LauncherModel.addOrMoveItemInDatabase(
+                    mLauncher, item, mInfo.id, 0, item.cellX, item.cellY);
+        }
     }
 
     public void onRemove(ShortcutInfo item) {
@@ -1086,6 +1149,13 @@ public class Folder extends LinearLayout implements DragSource, View.OnClickList
         if (getItemCount() <= 1) {
             replaceFolderWithFinalItem();
         }
+    }
+
+    public void onAllItemsRemoved() {
+        mItemsInvalidated = true;
+        mContent.removeAllViews();
+        setupContentForNumItems(getItemCount());
+        replaceFolderWithFinalItem();
     }
 
     private View getViewForInfo(ShortcutInfo item) {

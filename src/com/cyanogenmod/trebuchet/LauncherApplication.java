@@ -27,12 +27,14 @@ import android.database.ContentObserver;
 import android.os.Handler;
 
 import com.cyanogenmod.trebuchet.R;
+import com.cyanogenmod.trebuchet.preference.PreferencesProvider;
 
 import java.lang.ref.WeakReference;
 
 public class LauncherApplication extends Application {
-    public LauncherModel mModel;
-    public IconCache mIconCache;
+    private LauncherModel mModel;
+    private IconCache mIconCache;
+    private WidgetPreviewLoader.CacheDb mWidgetPreviewCacheDb;
     private static boolean sIsScreenLarge;
     private static float sScreenDensity;
     private static int sLongPressTimeout = 300;
@@ -47,6 +49,10 @@ public class LauncherApplication extends Application {
         sIsScreenLarge = getResources().getBoolean(R.bool.is_large_screen);
         sScreenDensity = getResources().getDisplayMetrics().density;
 
+        // Load all preferences
+        PreferencesProvider.load(this);
+
+        mWidgetPreviewCacheDb = new WidgetPreviewLoader.CacheDb(this);
         mIconCache = new IconCache(this);
         mModel = new LauncherModel(this, mIconCache);
 
@@ -106,7 +112,7 @@ public class LauncherApplication extends Application {
         return mModel;
     }
 
-    IconCache getIconCache() {
+    public IconCache getIconCache() {
         return mIconCache;
     }
 
@@ -114,7 +120,11 @@ public class LauncherApplication extends Application {
         return mModel;
     }
 
-    void setLauncherProvider(LauncherProvider provider) {
+    WidgetPreviewLoader.CacheDb getWidgetPreviewCacheDb() {
+        return mWidgetPreviewCacheDb;
+    }
+
+   void setLauncherProvider(LauncherProvider provider) {
         mLauncherProvider = new WeakReference<LauncherProvider>(provider);
     }
 

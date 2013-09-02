@@ -191,7 +191,7 @@ public class FolderIcon extends LinearLayout implements FolderListener {
             if (mNeutralAnimator != null) {
                 mNeutralAnimator.cancel();
             }
-            mAcceptAnimator = LauncherAnimUtils.ofFloat(0f, 1f);
+            mAcceptAnimator = LauncherAnimUtils.ofFloat(mCellLayout, 0f, 1f);
             mAcceptAnimator.setDuration(CONSUMPTION_ANIMATION_DURATION);
 
             final int previewSize = sPreviewSize;
@@ -220,7 +220,7 @@ public class FolderIcon extends LinearLayout implements FolderListener {
             if (mAcceptAnimator != null) {
                 mAcceptAnimator.cancel();
             }
-            mNeutralAnimator = LauncherAnimUtils.ofFloat(0f, 1f);
+            mNeutralAnimator = LauncherAnimUtils.ofFloat(mCellLayout, 0f, 1f);
             mNeutralAnimator.setDuration(CONSUMPTION_ANIMATION_DURATION);
 
             final int previewSize = sPreviewSize;
@@ -286,7 +286,7 @@ public class FolderIcon extends LinearLayout implements FolderListener {
         return ((itemType == LauncherSettings.Favorites.ITEM_TYPE_APPLICATION ||
                 itemType == LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT ||
                 itemType == LauncherSettings.Favorites.ITEM_TYPE_FOLDER) &&
-                !mFolder.isFull() && item != mInfo && !mInfo.opened);
+                !mFolder.isFull() && item != mInfo && !mInfo.opened && !(mFolder.getInfo() instanceof LiveFolderInfo));
     }
 
     public boolean acceptDrop(ItemInfo dragInfo) {
@@ -563,7 +563,7 @@ public class FolderIcon extends LinearLayout implements FolderListener {
         final float transY0 = (mAvailableSpaceInPreview - d.getIntrinsicHeight()) / 2;
         mAnimParams.drawable = d;
 
-        ValueAnimator va = LauncherAnimUtils.ofFloat(0f, 1.0f);
+        ValueAnimator va = LauncherAnimUtils.ofFloat(this, 0f, 1.0f);
         va.addUpdateListener(new AnimatorUpdateListener(){
             public void onAnimationUpdate(ValueAnimator animation) {
                 float progress = (Float) animation.getAnimatedValue();
@@ -652,5 +652,10 @@ public class FolderIcon extends LinearLayout implements FolderListener {
         super.cancelLongPress();
 
         mLongPressHelper.cancelLongPress();
+    }
+
+    @Override
+    public void onAllItemsRemoved() {
+        onRemove(null);
     }
 }
