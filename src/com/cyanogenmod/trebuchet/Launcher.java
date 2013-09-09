@@ -424,7 +424,6 @@ public final class Launcher extends Activity
         final Resources res = getResources();
 
         mPowerManager = (PowerManager) getSystemService(POWER_SERVICE);
-
         mAppWidgetManager = AppWidgetManager.getInstance(this);
         mAppWidgetHost = new LauncherAppWidgetHost(this, APPWIDGET_HOST_ID);
         mAppWidgetHost.startListening();
