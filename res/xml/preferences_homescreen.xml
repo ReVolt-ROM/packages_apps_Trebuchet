@@ -49,6 +49,12 @@
             android:title="@string/preferences_interface_homescreen_general_stretch_screens_title"
             android:summary="@string/preferences_interface_homescreen_general_stretch_screens_summary"
             android:defaultValue="true" />
+        <com.cyanogenmod.trebuchet.preference.SeekBarDialogPreference android:key="ui_icon_scale"
+            android:title="@string/preferences_interface_dock_icon_scale_title"
+            android:summary="@string/preferences_interface_homescreen_icon_scale_summary"
+            launcher:min="60"
+            launcher:max="100"
+            android:defaultValue="100" />
         <CheckBoxPreference android:key="ui_homescreen_general_search"
             android:title="@string/preferences_interface_homescreen_general_search_title"
             android:summary="@string/preferences_interface_homescreen_general_search_summary"

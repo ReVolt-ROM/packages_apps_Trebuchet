@@ -44,6 +44,7 @@ import android.graphics.Rect;
 import android.graphics.Region.Op;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.Handler;
 import android.os.IBinder;
 import android.os.Parcelable;
 import android.util.AttributeSet;
@@ -51,6 +52,7 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.SparseArray;
 import android.view.Display;
+import android.view.GestureDetector;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -321,6 +323,12 @@ public class Workspace extends PagedView
     private static final int SCROLLING_INDICATOR_TOP = 1;
     private static final int SCROLLING_INDICATOR_BOTTOM = 2;
 
+    private final GestureDetector mGestureDetector;
+    private Runnable mSwipeUpCallback = null;
+    private Runnable mSwipeDownCallback = null;
+    private Runnable mDoubleTapCallback = null;
+    private final Handler mHandler = new Handler();
+
     /**
      * Used to inflate the Workspace from XML.
      *
@@ -348,6 +356,7 @@ public class Workspace extends PagedView
 
         mLauncher = (Launcher) context;
         final Resources res = getResources();
+        float childrenScale = PreferencesProvider.Interface.Homescreen.getIconScale(100) / 100f;
         mHandleFadeInAdjacentScreens = true;
         mWallpaperManager = WallpaperManager.getInstance(context);
 
@@ -427,6 +436,36 @@ public class Workspace extends PagedView
 
         // Disable multitouch across the workspace/all apps/customize tray
         setMotionEventSplittingEnabled(true);
+
+        mGestureDetector = new GestureDetector(context,
+                new GestureDetector.SimpleOnGestureListener() {
+                    @Override
+                    public boolean onFling(MotionEvent e1, MotionEvent e2, float vX, float vY) {
+                        if (Math.abs(vY) > Math.abs(vX)) {
+                            if (vY < 0) {
+                                if (mSwipeUpCallback != null) {
+                                    mHandler.post(mSwipeUpCallback);
+                                    return true;
+                                }
+                            } else {
+                                if (mSwipeDownCallback != null) {
+                                    mHandler.post(mSwipeDownCallback);
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    }
+                    @Override
+                    public boolean onDoubleTapEvent(MotionEvent e) {
+                        if (mDoubleTapCallback != null) {
+                            mHandler.removeCallbacks(mDoubleTapCallback);
+                            mHandler.postDelayed(mDoubleTapCallback, 100);
+                            return true;
+                        }
+                        return false;
+                    }
+        });
 
         // Unless otherwise specified this view is important for accessibility.
         if (getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_AUTO) {
@@ -515,6 +554,7 @@ public class Workspace extends PagedView
      * Initializes various states for this workspace.
      */
     protected void initWorkspace() {
+        float childrenScale = PreferencesProvider.Interface.Homescreen.getIconScale(100) / 100f;
         Context context = getContext();
         mCurrentPage = mDefaultHomescreen;
         LauncherApplication app = (LauncherApplication)context.getApplicationContext();
@@ -530,6 +570,7 @@ public class Workspace extends PagedView
                 (LayoutInflater) getContext().getSystemService(Context.LAYOUT_INFLATER_SERVICE);
         for (int i = 0; i < mNumberHomescreens; i++) {
             CellLayout screen = (CellLayout) inflater.inflate(R.layout.workspace_screen, null);
+            screen.setChildrenScale(childrenScale);
             if (mStretchScreens) {
                 screen.setCellGaps(-1, -1);
             }
@@ -809,8 +850,32 @@ public class Workspace extends PagedView
         return !isSmall() && isFinishedSwitchingState() && super.dispatchUnhandledMove(focused, direction);
     }
 
+    public void setOnSwipeUpCallback(Runnable callback) {
+        mSwipeUpCallback = callback;
+    }
+
+    public void setOnSwipeDownCallback(Runnable callback) {
+        mSwipeDownCallback = callback;
+    }
+
+    public void setOnDoubleTapCallback(Runnable callback) {
+        mDoubleTapCallback = callback;
+    }
+
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
+        if (mSwipeUpCallback != null || mSwipeDownCallback != null || mDoubleTapCallback != null) {
+            boolean handled = mGestureDetector.onTouchEvent(ev);
+            switch (ev.getAction() & MotionEvent.ACTION_MASK) {
+                case MotionEvent.ACTION_OUTSIDE:
+                case MotionEvent.ACTION_CANCEL:
+                case MotionEvent.ACTION_UP:
+                    return handled;
+                case MotionEvent.ACTION_MOVE:
+                case MotionEvent.ACTION_DOWN:
+            }
+        }
+
         switch (ev.getAction() & MotionEvent.ACTION_MASK) {
         case MotionEvent.ACTION_DOWN:
             mXDown = ev.getX();

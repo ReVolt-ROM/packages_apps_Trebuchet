@@ -96,6 +96,9 @@ public final class PreferencesProvider {
             public static boolean getStretchScreens() {
                 return getBoolean("ui_homescreen_stretch_screens", true);
             }
+            public static int getIconScale(int def) {
+                return getInt("ui_icon_scale", def);
+            }
             public static boolean getShowSearchBar() {
                 return getBoolean("ui_homescreen_general_search", true);
             }
@@ -154,6 +157,15 @@ public final class PreferencesProvider {
             }
             public static String getHiddenApps() {
                 return getString("ui_drawer_hidden_apps", "");
+            }
+            public static int getIconScale(int def) {
+                return getInt("ui_drawer_icon_scale", def);
+            }
+            public static boolean getDrawerShowWallpaper() {
+                return true;
+            }
+            public static int getDrawerColor() {
+                return getInt("ui_drawer_background", 0xFF000000);
             }
             public static boolean getRemoveShortcutsOfHiddenApps() {
                 return getBoolean("ui_drawer_remove_hidden_apps_shortcuts", true);
@@ -223,7 +235,18 @@ public final class PreferencesProvider {
         }
 
         public static class Icons {
+        }
 
+        public static class Gestures {
+            public static int getHomescreenDoubleTap() {
+                return Integer.parseInt(getString("ui_homescreen_doubletap", "0"));
+            }
+            public static int getHomescreenSwipeUp() {
+                return Integer.parseInt(getString("ui_homescreen_swipe_up", "0"));
+            }
+            public static int getHomescreenSwipeDown() {
+                return Integer.parseInt(getString("ui_homescreen_swipe_down", "0"));
+            }
         }
 
         public static class General {
