@@ -1854,14 +1854,14 @@ public final class Launcher extends Activity
                 }
             };
 
-            //if (alreadyOnHome && !mWorkspace.hasWindowFocus()) {
+            if (alreadyOnHome && !mWorkspace.hasWindowFocus()) {
                 // Delay processing of the intent to allow the status bar animation to finish
                 // first in order to avoid janky animations.
-            //    mWorkspace.postDelayed(processIntent, 350);
-            //} else {
+                mWorkspace.postDelayed(processIntent, 350);
+            } else {
                 // Process the intent immediately.
                 processIntent.run();
-            //}
+            }
 
         }
     }
