@@ -3250,6 +3250,7 @@ public final class Launcher extends Activity
             toView.setScaleY(1.0f);
             toView.setVisibility(View.VISIBLE);
             toView.bringToFront();
+            toView.setAlpha(1f);
 
             if (!springLoaded && !LauncherApplication.isScreenLarge()) {
                 // Hide the workspace scrollbar
@@ -3369,6 +3370,7 @@ public final class Launcher extends Activity
             LauncherAnimUtils.startAnimationAfterNextDraw(mStateAnimation, toView);
         } else {
             fromView.setVisibility(View.GONE);
+            toView.setAlpha(1f);
             dispatchOnLauncherTransitionPrepare(fromView, animated, true);
             dispatchOnLauncherTransitionStart(fromView, animated, true);
             dispatchOnLauncherTransitionEnd(fromView, animated, true);
